@@ -1,4 +1,4 @@
-use crate::pac::{PWR, RCC};
+use crate::pac::{FLASH, PWR, RCC};
 use crate::rcc::{set_freqs, Clocks};
 use crate::time::Hertz;
 
@@ -8,11 +8,18 @@ pub const HSI_FREQ: Hertz = Hertz(16_000_000);
 /// LSI speed
 pub const LSI_FREQ: Hertz = Hertz(32_000);
 
+#[derive(Clone, Copy)]
+pub enum PLLSource {
+    HSE(Hertz),
+    HSI16,
+}
+
 /// System clock mux source
 #[derive(Clone, Copy)]
 pub enum ClockSrc {
     HSE(Hertz),
     HSI16,
+    PLL(PLLSource, Hertz),
 }
 
 /// AHB prescaler
@@ -89,6 +96,26 @@ impl Default for Config {
     }
 }
 
+fn PLLR(pllr: u32) -> u8 {
+    match pllr {
+        2 => 0,
+        4 => 1,
+        6 => 2,
+        8 => 3,
+        _ => panic!("invalid PLLR"),
+    }
+}
+
+fn PLLQ(pllq: u32) -> u8 {
+    match pllq {
+        2 => 0,
+        4 => 1,
+        6 => 2,
+        8 => 3,
+        _ => panic!("invalid PLLQ"),
+    }
+}
+
 pub(crate) unsafe fn init(config: Config) {
     let (sys_clk, sw) = match config.mux {
         ClockSrc::HSI16 => {
@@ -105,7 +132,106 @@ pub(crate) unsafe fn init(config: Config) {
 
             (freq.0, 0x02)
         }
+        ClockSrc::PLL(source, targetFreq) => {
+            let pll_input = match source {
+                PLLSource::HSE(freq) => freq,
+                PLLSource::HSI16 => Hertz::mhz(16),
+            };
+
+            let pllm = 4;
+
+            // VCO Input 2.66-16 MHz
+            let vco_input = Hertz(pll_input.0 / pllm);
+
+            // TODO should be configurable across devices?
+            if vco_input > Hertz::mhz(16) {
+                panic!("VCO Input frequency too high");
+            }
+            if vco_input < Hertz(2_660_000) {
+                panic!("VCO Input frequency too low")
+            }
+
+            // VCO Output range 96-344Mhz or 96-128MHz (depends on voltage scaling range)
+            // Assume voltage scaling range 1
+
+            let pllr = 2;
+            let plln = targetFreq.0 * pllr / vco_input.0;
+
+            let vco_output = Hertz(vco_input.0 * plln);
+            let r_output = Hertz(vco_output.0 / pllr);
+
+            if vco_output > Hertz::mhz(344) {
+                panic!("vco output frequency too high");
+            }
+            if vco_output < Hertz::mhz(96) {
+                panic!("vco output frequency too low");
+            }
+
+            let q_freq = Hertz::mhz(48);
+            if vco_output.0 % q_freq.0 != 0 {
+                panic!("cannot divide vco output to 48MHz");
+            }
+
+            let pllq = vco_output.0 / q_freq.0;
+
+            // Configure PLL
+            RCC.pllcfgr().write(|w| {
+                w.set_pllr(PLLR(pllr));
+                w.set_pllren(true);
+                w.set_pllq(PLLQ(pllq));
+                w.set_pllqen(true);
+                w.set_plln(plln.try_into().unwrap());
+                w.set_pllm(u8::try_from(pllm - 1).unwrap());
+                w.set_pllsrc(match source {
+                    PLLSource::HSE(_) => 0b11,
+                    PLLSource::HSI16 => 0b10,
+                })
+            });
+
+            if let PLLSource::HSE(_) = source {
+                // Start HSE if it is required as the source for PLL
+                RCC.cr().write(|w| w.set_hseon(true));
+                while !RCC.cr().read().hserdy() {}
+            }
+
+            // Start PLL
+            RCC.cr().write(|w| {
+                w.set_pllon(true);
+                if let PLLSource::HSE(_) = source {
+                    w.set_hseon(true);
+                };
+            });
+
+            // Wait for HSE
+            if let PLLSource::HSE(_) = source {
+                while !RCC.cr().read().hserdy() {}
+            }
+
+            // wait for the PLL
+            while !RCC.cr().read().pllrdy() {}
+
+            // use PLLQ for the USB
+            RCC.ccipr().modify(|q| {
+                q.set_clk48sel(0b10);
+            });
+
+            (r_output.0, 0x03)
+        }
     };
+
+    // let latency = if sys_clk <= 30 {
+    //     0
+    // } else if sys_clk <= 60 {
+    //     1
+    // } else if sys_clk <= 90 {
+    //     2
+    // } else if sys_clk <= 120 {
+    //     3
+    // } else {
+    //     4
+    // };
+
+    // TODO need to change memory wait cycles for faster system clock
 
     RCC.cfgr().modify(|w| {
         w.set_sw(sw.into());
@@ -113,6 +239,9 @@ pub(crate) unsafe fn init(config: Config) {
         w.set_ppre1(config.apb1_pre.into());
         w.set_ppre2(config.apb2_pre.into());
     });
+
+    // wait for the switch
+    while RCC.cfgr().read().sws() != sw {}
 
     let ahb_freq: u32 = match config.ahb_pre {
         AHBPrescaler::NotDivided => sys_clk,
