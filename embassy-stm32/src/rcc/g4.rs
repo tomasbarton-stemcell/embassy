@@ -1,4 +1,4 @@
-use crate::pac::{FLASH, PWR, RCC};
+use crate::pac::{PWR, RCC};
 use crate::rcc::{set_freqs, Clocks};
 use crate::time::Hertz;
 
@@ -96,7 +96,7 @@ impl Default for Config {
     }
 }
 
-fn PLLR(pllr: u32) -> u8 {
+fn pllr_flag(pllr: u32) -> u8 {
     match pllr {
         2 => 0,
         4 => 1,
@@ -106,7 +106,7 @@ fn PLLR(pllr: u32) -> u8 {
     }
 }
 
-fn PLLQ(pllq: u32) -> u8 {
+fn pllq_flag(pllq: u32) -> u8 {
     match pllq {
         2 => 0,
         4 => 1,
@@ -132,7 +132,7 @@ pub(crate) unsafe fn init(config: Config) {
 
             (freq.0, 0x02)
         }
-        ClockSrc::PLL(source, targetFreq) => {
+        ClockSrc::PLL(source, target_freq) => {
             let pll_input = match source {
                 PLLSource::HSE(freq) => freq,
                 PLLSource::HSI16 => Hertz::mhz(16),
@@ -155,7 +155,7 @@ pub(crate) unsafe fn init(config: Config) {
             // Assume voltage scaling range 1
 
             let pllr = 2;
-            let plln = targetFreq.0 * pllr / vco_input.0;
+            let plln = target_freq.0 * pllr / vco_input.0;
 
             let vco_output = Hertz(vco_input.0 * plln);
             let r_output = Hertz(vco_output.0 / pllr);
@@ -176,9 +176,9 @@ pub(crate) unsafe fn init(config: Config) {
 
             // Configure PLL
             RCC.pllcfgr().write(|w| {
-                w.set_pllr(PLLR(pllr));
+                w.set_pllr(pllr_flag(pllr));
                 w.set_pllren(true);
-                w.set_pllq(PLLQ(pllq));
+                w.set_pllq(pllq_flag(pllq));
                 w.set_pllqen(true);
                 w.set_plln(plln.try_into().unwrap());
                 w.set_pllm(u8::try_from(pllm - 1).unwrap());
