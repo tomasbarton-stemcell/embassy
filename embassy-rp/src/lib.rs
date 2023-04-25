@@ -12,6 +12,7 @@ mod intrinsics;
 
 pub mod adc;
 pub mod dma;
+mod float;
 pub mod gpio;
 pub mod i2c;
 pub mod interrupt;
@@ -20,6 +21,7 @@ pub mod interrupt;
 pub mod pio;
 #[cfg(feature = "pio")]
 pub mod pio_instr_util;
+pub mod pwm;
 #[cfg(feature = "pio")]
 pub mod relocate;
 
@@ -44,9 +46,9 @@ pub use embassy_cortex_m::executor;
 pub use embassy_cortex_m::interrupt::_export::interrupt;
 pub use embassy_hal_common::{into_ref, Peripheral, PeripheralRef};
 #[cfg(feature = "unstable-pac")]
-pub use rp2040_pac2 as pac;
+pub use rp_pac as pac;
 #[cfg(not(feature = "unstable-pac"))]
-pub(crate) use rp2040_pac2 as pac;
+pub(crate) use rp_pac as pac;
 
 embassy_hal_common::peripherals! {
     PIN_0,
@@ -107,6 +109,15 @@ embassy_hal_common::peripherals! {
     DMA_CH9,
     DMA_CH10,
     DMA_CH11,
+
+    PWM_CH0,
+    PWM_CH1,
+    PWM_CH2,
+    PWM_CH3,
+    PWM_CH4,
+    PWM_CH5,
+    PWM_CH6,
+    PWM_CH7,
 
     USB,
 

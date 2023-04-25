@@ -43,19 +43,20 @@ pub mod i2c;
 
 #[cfg(crc)]
 pub mod crc;
-#[cfg(any(
-    flash_l0, flash_l1, flash_wl, flash_wb, flash_l4, flash_f3, flash_f4, flash_f7, flash_h7
-))]
 pub mod flash;
 pub mod pwm;
 #[cfg(quadspi)]
 pub mod qspi;
 #[cfg(rng)]
 pub mod rng;
+#[cfg(all(rtc, not(any(rtc_v1, rtc_v2f0, rtc_v2f7, rtc_v3, rtc_v3u5))))]
+pub mod rtc;
 #[cfg(sdmmc)]
 pub mod sdmmc;
 #[cfg(spi)]
 pub mod spi;
+#[cfg(stm32wl)]
+pub mod subghz;
 #[cfg(usart)]
 pub mod usart;
 #[cfg(all(usb, feature = "time"))]
@@ -64,9 +65,6 @@ pub mod usb;
 pub mod usb_otg;
 #[cfg(iwdg)]
 pub mod wdg;
-
-#[cfg(feature = "subghz")]
-pub mod subghz;
 
 // This must go last, so that it sees all the impl_foo! macros defined earlier.
 pub(crate) mod _generated {
@@ -80,7 +78,6 @@ pub(crate) mod _generated {
 // Reexports
 pub use _generated::{peripherals, Peripherals};
 pub use embassy_cortex_m::executor;
-#[cfg(any(dma, bdma))]
 use embassy_cortex_m::interrupt::Priority;
 pub use embassy_cortex_m::interrupt::_export::interrupt;
 pub use embassy_hal_common::{into_ref, Peripheral, PeripheralRef};
@@ -98,6 +95,8 @@ pub struct Config {
     pub bdma_interrupt_priority: Priority,
     #[cfg(dma)]
     pub dma_interrupt_priority: Priority,
+    #[cfg(gpdma)]
+    pub gpdma_interrupt_priority: Priority,
 }
 
 impl Default for Config {
@@ -110,6 +109,8 @@ impl Default for Config {
             bdma_interrupt_priority: Priority::P0,
             #[cfg(dma)]
             dma_interrupt_priority: Priority::P0,
+            #[cfg(gpdma)]
+            gpdma_interrupt_priority: Priority::P0,
         }
     }
 }
@@ -153,6 +154,8 @@ pub fn init(config: Config) -> Peripherals {
             config.bdma_interrupt_priority,
             #[cfg(dma)]
             config.dma_interrupt_priority,
+            #[cfg(gpdma)]
+            config.gpdma_interrupt_priority,
         );
         #[cfg(feature = "exti")]
         exti::init();
