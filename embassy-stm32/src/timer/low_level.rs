@@ -238,6 +238,14 @@ impl<'d, T: CoreInstance> Timer<'d, T> {
     /// get the capability of the timer
     pub fn bits(&self) -> TimerBits {
         T::BITS
+    /// reset the peripheral registers
+    pub fn enable_and_reset(&self) {
+        rcc::enable_and_reset::<T>();
+    }
+
+    /// disable the peripheral
+    pub fn disable(&self) {
+        rcc::disable::<T>();
     }
 
     /// Set the frequency of how many times per second the timer counts up to the max value or down to 0.
