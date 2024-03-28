@@ -213,6 +213,63 @@ impl<'d, T: Instance> AdvancedPwm<'d, T> {
     }
 }
 
+/// Simple PWM driver
+pub struct SimplePwm<T: Instance, C: AdvancedChannel<T>> {
+    timer: PhantomData<T>,
+    channel: PhantomData<C>,
+}
+
+impl<T: Instance, C: AdvancedChannel<T>> SimplePwm<T, C> {
+    /// Create a new HRTIM simple PWM driver.
+    pub fn new(_channel: C, frequency: Hertz) -> Self {
+        use crate::pac::hrtim::vals::{Activeeffect, Inactiveeffect};
+
+        T::set_channel_frequency(C::raw(), frequency);
+
+        // Always enable preload
+        T::regs().tim(C::raw()).cr().modify(|w| {
+            w.set_preen(true);
+            w.set_repu(true);
+            w.set_cont(true);
+        });
+
+        // Enable timer outputs
+        T::regs().oenr().modify(|w| {
+            w.set_t1oen(C::raw(), true);
+        });
+
+        // Set output 1 to active on a period event
+        T::regs()
+            .tim(C::raw())
+            .setr(0)
+            .modify(|w| w.set_per(Activeeffect::SETACTIVE));
+
+        // Set output 1 to inactive on a compare 1 event
+        T::regs()
+            .tim(C::raw())
+            .rstr(0)
+            .modify(|w| w.set_cmp(0, Inactiveeffect::SETINACTIVE));
+
+        Self {
+            timer: PhantomData,
+            channel: PhantomData,
+        }
+    }
+
+    /// Start HRTIM.
+    pub fn start(&mut self) {
+        T::regs().mcr().modify(|w| w.set_tcen(C::raw(), true));
+    }
+
+    pub fn set_duty(&mut self, duty: u16) {
+        T::regs().tim(C::raw()).cmp(0).modify(|w| w.set_cmp(duty));
+    }
+
+    pub fn get_max_compare_value(&mut self) -> u16 {
+        T::regs().tim(C::raw()).per().read().per()
+    }
+}
+
 /// Fixed-frequency bridge converter driver.
 ///
 /// Our implementation of the bridge converter uses a single channel and three compare registers,
