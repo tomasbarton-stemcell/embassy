@@ -1,4 +1,4 @@
-use core::future::Future;
+use core::future::{poll_fn, Future};
 use core::pin::Pin;
 use core::sync::atomic::{fence, AtomicUsize, Ordering};
 use core::task::{Context, Poll, Waker};
@@ -15,6 +15,8 @@ use crate::{interrupt, pac};
 pub(crate) struct ChannelInfo {
     pub(crate) dma: DmaInfo,
     pub(crate) num: usize,
+    #[cfg(feature = "_dual-core")]
+    pub(crate) irq: pac::Interrupt,
     #[cfg(dmamux)]
     pub(crate) dmamux: super::DmamuxInfo,
 }
@@ -259,10 +261,12 @@ pub(crate) unsafe fn init(
     foreach_interrupt! {
         ($peri:ident, dma, $block:ident, $signal_name:ident, $irq:ident) => {
             crate::interrupt::typelevel::$irq::set_priority_with_cs(cs, dma_priority);
+            #[cfg(not(feature = "_dual-core"))]
             crate::interrupt::typelevel::$irq::enable();
         };
         ($peri:ident, bdma, $block:ident, $signal_name:ident, $irq:ident) => {
             crate::interrupt::typelevel::$irq::set_priority_with_cs(cs, bdma_priority);
+            #[cfg(not(feature = "_dual-core"))]
             crate::interrupt::typelevel::$irq::enable();
         };
     }
@@ -341,6 +345,11 @@ impl AnyChannel {
         options: TransferOptions,
     ) {
         let info = self.info();
+        #[cfg(feature = "_dual-core")]
+        {
+            use embassy_hal_internal::interrupt::InterruptExt as _;
+            info.irq.enable();
+        }
 
         #[cfg(dmamux)]
         super::dmamux::configure_dmamux(&info.dmamux, _request);
@@ -510,6 +519,31 @@ impl AnyChannel {
             DmaInfo::Bdma(r) => r.ch(info.num).ndtr().read().ndt(),
         }
     }
+
+    fn disable_circular_mode(&self) {
+        let info = self.info();
+        match self.info().dma {
+            #[cfg(dma)]
+            DmaInfo::Dma(regs) => regs.st(info.num).cr().modify(|w| {
+                w.set_circ(false);
+            }),
+            #[cfg(bdma)]
+            DmaInfo::Bdma(regs) => regs.ch(info.num).cr().modify(|w| {
+                w.set_circ(false);
+            }),
+        }
+    }
+
+    fn poll_stop(&self) -> Poll<()> {
+        use core::sync::atomic::compiler_fence;
+        compiler_fence(Ordering::SeqCst);
+
+        if !self.is_running() {
+            Poll::Ready(())
+        } else {
+            Poll::Pending
+        }
+    }
 }
 
 /// DMA transfer.
@@ -540,16 +574,13 @@ impl<'a> Transfer<'a> {
     ) -> Self {
         into_ref!(channel);
 
-        let (ptr, len) = super::slice_ptr_parts_mut(buf);
-        assert!(len > 0 && len <= 0xFFFF);
-
         Self::new_inner(
             channel.map_into(),
             request,
             Dir::PeripheralToMemory,
             peri_addr as *const u32,
-            ptr as *mut u32,
-            len,
+            buf as *mut W as *mut u32,
+            buf.len(),
             true,
             W::size(),
             options,
@@ -577,16 +608,13 @@ impl<'a> Transfer<'a> {
     ) -> Self {
         into_ref!(channel);
 
-        let (ptr, len) = super::slice_ptr_parts(buf);
-        assert!(len > 0 && len <= 0xFFFF);
-
         Self::new_inner(
             channel.map_into(),
             request,
             Dir::MemoryToPeripheral,
             peri_addr as *const u32,
-            ptr as *mut u32,
-            len,
+            buf as *const W as *mut u32,
+            buf.len(),
             true,
             W::size(),
             options,
@@ -628,6 +656,8 @@ impl<'a> Transfer<'a> {
         data_size: WordSize,
         options: TransferOptions,
     ) -> Self {
+        assert!(mem_len > 0 && mem_len <= 0xFFFF);
+
         channel.configure(
             _request, dir, peri_addr, mem_addr, mem_len, incr_mem, data_size, options,
         );
@@ -829,6 +859,25 @@ impl<'a, W: Word> ReadableRingBuffer<'a, W> {
     pub fn is_running(&mut self) -> bool {
         self.channel.is_running()
     }
+
+    /// Stop the DMA transfer and await until the buffer is full.
+    ///
+    /// This disables the DMA transfer's circular mode so that the transfer
+    /// stops when the buffer is full.
+    ///
+    /// This is designed to be used with streaming input data such as the
+    /// I2S/SAI or ADC.
+    ///
+    /// When using the UART, you probably want `request_stop()`.
+    pub async fn stop(&mut self) {
+        self.channel.disable_circular_mode();
+        //wait until cr.susp reads as true
+        poll_fn(|cx| {
+            self.set_waker(cx.waker());
+            self.channel.poll_stop()
+        })
+        .await
+    }
 }
 
 impl<'a, W: Word> Drop for ReadableRingBuffer<'a, W> {
@@ -864,6 +913,7 @@ impl<'a, W: Word> WritableRingBuffer<'a, W> {
         let data_size = W::size();
         let buffer_ptr = buffer.as_mut_ptr();
 
+        options.half_transfer_ir = true;
         options.complete_transfer_ir = true;
         options.circular = true;
 
@@ -939,6 +989,23 @@ impl<'a, W: Word> WritableRingBuffer<'a, W> {
     /// it was requested to stop early with [`request_stop`](Self::request_stop).
     pub fn is_running(&mut self) -> bool {
         self.channel.is_running()
+    }
+
+    /// Stop the DMA transfer and await until the buffer is empty.
+    ///
+    /// This disables the DMA transfer's circular mode so that the transfer
+    /// stops when all available data has been written.
+    ///
+    /// This is designed to be used with streaming output data such as the
+    /// I2S/SAI or DAC.
+    pub async fn stop(&mut self) {
+        self.channel.disable_circular_mode();
+        //wait until cr.susp reads as true
+        poll_fn(|cx| {
+            self.set_waker(cx.waker());
+            self.channel.poll_stop()
+        })
+        .await
     }
 }
 

@@ -42,9 +42,11 @@ pub enum ScanType {
     Passive,
 }
 
+/// Scan options.
 #[derive(Clone)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct ScanOptions {
+    /// SSID to scan for.
     pub ssid: Option<heapless::String<32>>,
     /// If set to `None`, all APs will be returned. If set to `Some`, only APs
     /// with the specified BSSID will be returned.
@@ -81,8 +83,7 @@ impl<'a> Control<'a> {
         }
     }
 
-    /// Initialize WiFi controller.
-    pub async fn init(&mut self, clm: &[u8]) {
+    async fn load_clm(&mut self, clm: &[u8]) {
         const CHUNK_SIZE: usize = 1024;
 
         debug!("Downloading CLM...");
@@ -114,6 +115,11 @@ impl<'a> Control<'a> {
 
         // check clmload ok
         assert_eq!(self.get_iovar_u32("clmload_status").await, 0);
+    }
+
+    /// Initialize WiFi controller.
+    pub async fn init(&mut self, clm: &[u8]) {
+        self.load_clm(&clm).await;
 
         debug!("Configuring misc stuff...");
 
@@ -124,8 +130,7 @@ impl<'a> Control<'a> {
         self.set_iovar_u32("apsta", 1).await;
 
         // read MAC addr.
-        let mut mac_addr = [0; 6];
-        assert_eq!(self.get_iovar("cur_etheraddr", &mut mac_addr).await, 6);
+        let mac_addr = self.address().await;
         debug!("mac addr: {:02x}", Bytes(&mac_addr));
 
         let country = countries::WORLD_WIDE_XX;
@@ -185,7 +190,7 @@ impl<'a> Control<'a> {
 
         self.state_ch.set_hardware_address(HardwareAddress::Ethernet(mac_addr));
 
-        debug!("INIT DONE");
+        debug!("cyw43 control init done");
     }
 
     /// Set the WiFi interface up.
@@ -229,8 +234,8 @@ impl<'a> Control<'a> {
         self.wait_for_join(i).await
     }
 
-    /// Join an protected network with the provided ssid and passphrase.
-    pub async fn join_wpa2(&mut self, ssid: &str, passphrase: &str) -> Result<(), Error> {
+    /// Join a protected network with the provided ssid and [`PassphraseInfo`].
+    async fn join_wpa2_passphrase_info(&mut self, ssid: &str, passphrase_info: &PassphraseInfo) -> Result<(), Error> {
         self.set_iovar_u32("ampdu_ba_wsize", 8).await;
 
         self.ioctl_set_u32(134, 0, 4).await; // wsec = wpa2
@@ -240,14 +245,13 @@ impl<'a> Control<'a> {
 
         Timer::after_millis(100).await;
 
-        let mut pfi = PassphraseInfo {
-            len: passphrase.len() as _,
-            flags: 1,
-            passphrase: [0; 64],
-        };
-        pfi.passphrase[..passphrase.len()].copy_from_slice(passphrase.as_bytes());
-        self.ioctl(IoctlType::Set, IOCTL_CMD_SET_PASSPHRASE, 0, &mut pfi.to_bytes())
-            .await; // WLC_SET_WSEC_PMK
+        self.ioctl(
+            IoctlType::Set,
+            IOCTL_CMD_SET_PASSPHRASE,
+            0,
+            &mut passphrase_info.to_bytes(),
+        )
+        .await; // WLC_SET_WSEC_PMK
 
         self.ioctl_set_u32(20, 0, 1).await; // set_infra = 1
         self.ioctl_set_u32(22, 0, 0).await; // set_auth = 0 (open)
@@ -260,6 +264,28 @@ impl<'a> Control<'a> {
         i.ssid[..ssid.len()].copy_from_slice(ssid.as_bytes());
 
         self.wait_for_join(i).await
+    }
+
+    /// Join a protected network with the provided ssid and passphrase.
+    pub async fn join_wpa2(&mut self, ssid: &str, passphrase: &str) -> Result<(), Error> {
+        let mut pfi = PassphraseInfo {
+            len: passphrase.len() as _,
+            flags: 1,
+            passphrase: [0; 64],
+        };
+        pfi.passphrase[..passphrase.len()].copy_from_slice(passphrase.as_bytes());
+        self.join_wpa2_passphrase_info(ssid, &pfi).await
+    }
+
+    /// Join a protected network with the provided ssid and precomputed PSK.
+    pub async fn join_wpa2_psk(&mut self, ssid: &str, psk: &[u8; 32]) -> Result<(), Error> {
+        let mut pfi = PassphraseInfo {
+            len: psk.len() as _,
+            flags: 0,
+            passphrase: [0; 64],
+        };
+        pfi.passphrase[..psk.len()].copy_from_slice(psk);
+        self.join_wpa2_passphrase_info(ssid, &pfi).await
     }
 
     async fn wait_for_join(&mut self, i: SsidInfo) -> Result<(), Error> {
@@ -371,6 +397,24 @@ impl<'a> Control<'a> {
 
         // Start AP
         self.set_iovar_u32x2("bss", 0, 1).await; // bss = BSS_UP
+    }
+
+    /// Closes access point.
+    pub async fn close_ap(&mut self) {
+        // Stop AP
+        self.set_iovar_u32x2("bss", 0, 0).await; // bss = BSS_DOWN
+
+        // Turn off AP mode
+        self.ioctl_set_u32(IOCTL_CMD_SET_AP, 0, 0).await;
+
+        // Temporarily set wifi down
+        self.down().await;
+
+        // Turn on APSTA mode
+        self.set_iovar_u32("apsta", 1).await;
+
+        // Set wifi up again
+        self.up().await;
     }
 
     /// Add specified address to the list of hardware addresses the device
@@ -573,6 +617,13 @@ impl<'a> Control<'a> {
     pub async fn leave(&mut self) {
         self.ioctl(IoctlType::Set, IOCTL_CMD_DISASSOC, 0, &mut []).await;
         info!("Disassociated")
+    }
+
+    /// Gets the MAC address of the device
+    pub async fn address(&mut self) -> [u8; 6] {
+        let mut mac_addr = [0; 6];
+        assert_eq!(self.get_iovar("cur_etheraddr", &mut mac_addr).await, 6);
+        mac_addr
     }
 }
 

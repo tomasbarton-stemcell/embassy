@@ -59,6 +59,7 @@ pub struct Pll {
     pub divr: Option<PllDiv>,
 }
 
+#[derive(Clone, Copy)]
 pub struct Config {
     // base clock sources
     pub msi: Option<MSIRange>,
@@ -288,6 +289,9 @@ pub(crate) unsafe fn init(config: Config) {
         pll3_p: pll3.p,
         pll3_q: pll3.q,
         pll3_r: pll3.r,
+
+        #[cfg(dsihost)]
+        dsi_phy: None, // DSI PLL clock not supported, don't call `RccPeripheral::frequency()` in the drivers
 
         // TODO
         audioclk: None,

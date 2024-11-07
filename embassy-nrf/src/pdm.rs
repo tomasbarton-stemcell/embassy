@@ -1,4 +1,4 @@
-//! Pulse Density Modulation (PDM) mirophone driver
+//! Pulse Density Modulation (PDM) microphone driver
 
 #![macro_use]
 
@@ -9,11 +9,11 @@ use core::task::Poll;
 
 use embassy_hal_internal::drop::OnDrop;
 use embassy_hal_internal::{into_ref, PeripheralRef};
+use embassy_sync::waitqueue::AtomicWaker;
 use fixed::types::I7F1;
 
 use crate::chip::EASY_DMA_SIZE;
-use crate::gpio::sealed::Pin;
-use crate::gpio::{AnyPin, Pin as GpioPin};
+use crate::gpio::{AnyPin, Pin as GpioPin, SealedPin};
 use crate::interrupt::typelevel::Interrupt;
 use crate::pac::pdm::mode::{EDGE_A, OPERATION_A};
 pub use crate::pac::pdm::pdmclkctrl::FREQ_A as Frequency;
@@ -21,7 +21,7 @@ pub use crate::pac::pdm::pdmclkctrl::FREQ_A as Frequency;
     feature = "nrf52840",
     feature = "nrf52833",
     feature = "_nrf5340-app",
-    feature = "_nrf9160",
+    feature = "_nrf91",
 ))]
 pub use crate::pac::pdm::ratio::RATIO_A as Ratio;
 use crate::{interrupt, Peripheral};
@@ -121,7 +121,7 @@ impl<'d, T: Instance> Pdm<'d, T> {
             feature = "nrf52840",
             feature = "nrf52833",
             feature = "_nrf5340-app",
-            feature = "_nrf9160",
+            feature = "_nrf91",
         ))]
         r.ratio.write(|w| w.ratio().variant(config.ratio));
         r.mode.write(|w| {
@@ -374,7 +374,7 @@ pub struct Config {
         feature = "nrf52840",
         feature = "nrf52833",
         feature = "_nrf5340-app",
-        feature = "_nrf9160",
+        feature = "_nrf91",
     ))]
     pub ratio: Ratio,
     /// Gain left in dB
@@ -393,7 +393,7 @@ impl Default for Config {
                 feature = "nrf52840",
                 feature = "nrf52833",
                 feature = "_nrf5340-app",
-                feature = "_nrf9160",
+                feature = "_nrf91",
             ))]
             ratio: Ratio::RATIO80,
             gain_left: I7F1::ZERO,
@@ -451,42 +451,39 @@ impl<'d, T: Instance> Drop for Pdm<'d, T> {
     }
 }
 
-pub(crate) mod sealed {
-    use embassy_sync::waitqueue::AtomicWaker;
+/// Peripheral static state
+pub(crate) struct State {
+    waker: AtomicWaker,
+}
 
-    /// Peripheral static state
-    pub struct State {
-        pub waker: AtomicWaker,
-    }
-
-    impl State {
-        pub const fn new() -> Self {
-            Self {
-                waker: AtomicWaker::new(),
-            }
+impl State {
+    pub(crate) const fn new() -> Self {
+        Self {
+            waker: AtomicWaker::new(),
         }
-    }
-
-    pub trait Instance {
-        fn regs() -> &'static crate::pac::pdm::RegisterBlock;
-        fn state() -> &'static State;
     }
 }
 
+pub(crate) trait SealedInstance {
+    fn regs() -> &'static crate::pac::pdm::RegisterBlock;
+    fn state() -> &'static State;
+}
+
 /// PDM peripheral instance
-pub trait Instance: Peripheral<P = Self> + sealed::Instance + 'static + Send {
+#[allow(private_bounds)]
+pub trait Instance: Peripheral<P = Self> + SealedInstance + 'static + Send {
     /// Interrupt for this peripheral
     type Interrupt: interrupt::typelevel::Interrupt;
 }
 
 macro_rules! impl_pdm {
     ($type:ident, $pac_type:ident, $irq:ident) => {
-        impl crate::pdm::sealed::Instance for peripherals::$type {
+        impl crate::pdm::SealedInstance for peripherals::$type {
             fn regs() -> &'static crate::pac::pdm::RegisterBlock {
                 unsafe { &*pac::$pac_type::ptr() }
             }
-            fn state() -> &'static crate::pdm::sealed::State {
-                static STATE: crate::pdm::sealed::State = crate::pdm::sealed::State::new();
+            fn state() -> &'static crate::pdm::State {
+                static STATE: crate::pdm::State = crate::pdm::State::new();
                 &STATE
             }
         }

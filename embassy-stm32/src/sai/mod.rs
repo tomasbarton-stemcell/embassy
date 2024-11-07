@@ -6,18 +6,16 @@ use core::marker::PhantomData;
 
 use embassy_hal_internal::{into_ref, PeripheralRef};
 
-use self::sealed::WhichSubBlock;
 pub use crate::dma::word;
 #[cfg(not(gpdma))]
 use crate::dma::{ringbuffer, Channel, ReadableRingBuffer, Request, TransferOptions, WritableRingBuffer};
-use crate::gpio::sealed::{AFType, Pin as _};
-use crate::gpio::AnyPin;
+use crate::gpio::{AfType, AnyPin, OutputType, Pull, SealedPin as _, Speed};
 use crate::pac::sai::{vals, Sai as Regs};
-use crate::rcc::RccPeripheral;
+use crate::rcc::{self, RccPeripheral};
 use crate::{peripherals, Peripheral};
 
 /// SAI error
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum Error {
     /// `write` called on a SAI in receive mode.
@@ -386,6 +384,7 @@ impl OutputDrive {
 /// Master clock divider.
 #[derive(Copy, Clone, PartialEq)]
 #[allow(missing_docs)]
+#[cfg(any(sai_v1, sai_v2))]
 pub enum MasterClockDivider {
     MasterClockDisabled,
     Div1,
@@ -406,8 +405,79 @@ pub enum MasterClockDivider {
     Div30,
 }
 
+/// Master clock divider.
+#[derive(Copy, Clone, PartialEq)]
+#[allow(missing_docs)]
+#[cfg(any(sai_v3_2pdm, sai_v3_4pdm, sai_v4_2pdm, sai_v4_4pdm))]
+pub enum MasterClockDivider {
+    MasterClockDisabled,
+    Div1,
+    Div2,
+    Div3,
+    Div4,
+    Div5,
+    Div6,
+    Div7,
+    Div8,
+    Div9,
+    Div10,
+    Div11,
+    Div12,
+    Div13,
+    Div14,
+    Div15,
+    Div16,
+    Div17,
+    Div18,
+    Div19,
+    Div20,
+    Div21,
+    Div22,
+    Div23,
+    Div24,
+    Div25,
+    Div26,
+    Div27,
+    Div28,
+    Div29,
+    Div30,
+    Div31,
+    Div32,
+    Div33,
+    Div34,
+    Div35,
+    Div36,
+    Div37,
+    Div38,
+    Div39,
+    Div40,
+    Div41,
+    Div42,
+    Div43,
+    Div44,
+    Div45,
+    Div46,
+    Div47,
+    Div48,
+    Div49,
+    Div50,
+    Div51,
+    Div52,
+    Div53,
+    Div54,
+    Div55,
+    Div56,
+    Div57,
+    Div58,
+    Div59,
+    Div60,
+    Div61,
+    Div62,
+    Div63,
+}
+
 impl MasterClockDivider {
-    #[cfg(any(sai_v1, sai_v2, sai_v3_2pdm, sai_v3_4pdm, sai_v4_2pdm, sai_v4_4pdm))]
+    #[cfg(any(sai_v1, sai_v2))]
     const fn mckdiv(&self) -> u8 {
         match self {
             MasterClockDivider::MasterClockDisabled => 0,
@@ -427,6 +497,76 @@ impl MasterClockDivider {
             MasterClockDivider::Div26 => 13,
             MasterClockDivider::Div28 => 14,
             MasterClockDivider::Div30 => 15,
+        }
+    }
+
+    #[cfg(any(sai_v3_2pdm, sai_v3_4pdm, sai_v4_2pdm, sai_v4_4pdm))]
+    const fn mckdiv(&self) -> u8 {
+        match self {
+            MasterClockDivider::MasterClockDisabled => 0,
+            MasterClockDivider::Div1 => 1,
+            MasterClockDivider::Div2 => 2,
+            MasterClockDivider::Div3 => 3,
+            MasterClockDivider::Div4 => 4,
+            MasterClockDivider::Div5 => 5,
+            MasterClockDivider::Div6 => 6,
+            MasterClockDivider::Div7 => 7,
+            MasterClockDivider::Div8 => 8,
+            MasterClockDivider::Div9 => 9,
+            MasterClockDivider::Div10 => 10,
+            MasterClockDivider::Div11 => 11,
+            MasterClockDivider::Div12 => 12,
+            MasterClockDivider::Div13 => 13,
+            MasterClockDivider::Div14 => 14,
+            MasterClockDivider::Div15 => 15,
+            MasterClockDivider::Div16 => 16,
+            MasterClockDivider::Div17 => 17,
+            MasterClockDivider::Div18 => 18,
+            MasterClockDivider::Div19 => 19,
+            MasterClockDivider::Div20 => 20,
+            MasterClockDivider::Div21 => 21,
+            MasterClockDivider::Div22 => 22,
+            MasterClockDivider::Div23 => 23,
+            MasterClockDivider::Div24 => 24,
+            MasterClockDivider::Div25 => 25,
+            MasterClockDivider::Div26 => 26,
+            MasterClockDivider::Div27 => 27,
+            MasterClockDivider::Div28 => 28,
+            MasterClockDivider::Div29 => 29,
+            MasterClockDivider::Div30 => 30,
+            MasterClockDivider::Div31 => 31,
+            MasterClockDivider::Div32 => 32,
+            MasterClockDivider::Div33 => 33,
+            MasterClockDivider::Div34 => 34,
+            MasterClockDivider::Div35 => 35,
+            MasterClockDivider::Div36 => 36,
+            MasterClockDivider::Div37 => 37,
+            MasterClockDivider::Div38 => 38,
+            MasterClockDivider::Div39 => 39,
+            MasterClockDivider::Div40 => 40,
+            MasterClockDivider::Div41 => 41,
+            MasterClockDivider::Div42 => 42,
+            MasterClockDivider::Div43 => 43,
+            MasterClockDivider::Div44 => 44,
+            MasterClockDivider::Div45 => 45,
+            MasterClockDivider::Div46 => 46,
+            MasterClockDivider::Div47 => 47,
+            MasterClockDivider::Div48 => 48,
+            MasterClockDivider::Div49 => 49,
+            MasterClockDivider::Div50 => 50,
+            MasterClockDivider::Div51 => 51,
+            MasterClockDivider::Div52 => 52,
+            MasterClockDivider::Div53 => 53,
+            MasterClockDivider::Div54 => 54,
+            MasterClockDivider::Div55 => 55,
+            MasterClockDivider::Div56 => 56,
+            MasterClockDivider::Div57 => 57,
+            MasterClockDivider::Div58 => 58,
+            MasterClockDivider::Div59 => 59,
+            MasterClockDivider::Div60 => 60,
+            MasterClockDivider::Div61 => 61,
+            MasterClockDivider::Div62 => 62,
+            MasterClockDivider::Div63 => 63,
         }
     }
 }
@@ -516,17 +656,17 @@ fn dr<W: word::Word>(w: crate::pac::sai::Sai, sub_block: WhichSubBlock) -> *mut 
 }
 
 // return the type for (sd, sck)
-fn get_af_types(mode: Mode, tx_rx: TxRx) -> (AFType, AFType) {
+fn get_af_types(mode: Mode, tx_rx: TxRx) -> (AfType, AfType) {
     (
         //sd is defined by tx/rx mode
         match tx_rx {
-            TxRx::Transmitter => AFType::OutputPushPull,
-            TxRx::Receiver => AFType::Input,
+            TxRx::Transmitter => AfType::output(OutputType::PushPull, Speed::VeryHigh),
+            TxRx::Receiver => AfType::input(Pull::None),
         },
         //clocks (mclk, sck and fs) are defined by master/slave
         match mode {
-            Mode::Master => AFType::OutputPushPull,
-            Mode::Slave => AFType::Input,
+            Mode::Master => AfType::output(OutputType::PushPull, Speed::VeryHigh),
+            Mode::Slave => AfType::input(Pull::None),
         },
     )
 }
@@ -582,7 +722,7 @@ pub struct SubBlock<'d, T, S: SubBlockInstance> {
 /// You can then create a [`Sai`] driver for each each half.
 pub fn split_subblocks<'d, T: Instance>(peri: impl Peripheral<P = T> + 'd) -> (SubBlock<'d, T, A>, SubBlock<'d, T, B>) {
     into_ref!(peri);
-    T::enable_and_reset();
+    rcc::enable_and_reset::<T>();
 
     (
         SubBlock {
@@ -628,9 +768,7 @@ impl<'d, T: Instance, W: word::Word> Sai<'d, T, W> {
         into_ref!(mclk);
 
         let (_sd_af_type, ck_af_type) = get_af_types(config.mode, config.tx_rx);
-
         mclk.set_as_af(mclk.af_num(), ck_af_type);
-        mclk.set_speed(crate::gpio::Speed::VeryHigh);
 
         if config.master_clock_divider == MasterClockDivider::MasterClockDisabled {
             config.master_clock_divider = MasterClockDivider::Div1;
@@ -656,12 +794,8 @@ impl<'d, T: Instance, W: word::Word> Sai<'d, T, W> {
 
         let (sd_af_type, ck_af_type) = get_af_types(config.mode, config.tx_rx);
         sd.set_as_af(sd.af_num(), sd_af_type);
-        sd.set_speed(crate::gpio::Speed::VeryHigh);
-
         sck.set_as_af(sck.af_num(), ck_af_type);
-        sck.set_speed(crate::gpio::Speed::VeryHigh);
         fs.set_as_af(fs.af_num(), ck_af_type);
-        fs.set_speed(crate::gpio::Speed::VeryHigh);
 
         let sub_block = S::WHICH;
         let request = dma.request();
@@ -694,9 +828,7 @@ impl<'d, T: Instance, W: word::Word> Sai<'d, T, W> {
         into_ref!(dma, peri, sd);
 
         let (sd_af_type, _ck_af_type) = get_af_types(config.mode, config.tx_rx);
-
         sd.set_as_af(sd.af_num(), sd_af_type);
-        sd.set_speed(crate::gpio::Speed::VeryHigh);
 
         let sub_block = S::WHICH;
         let request = dma.request();
@@ -838,7 +970,7 @@ impl<'d, T: Instance, W: word::Word> Sai<'d, T, W> {
 
     /// Reset SAI operation.
     pub fn reset() {
-        T::enable_and_reset();
+        rcc::enable_and_reset::<T>();
     }
 
     /// Flush.
@@ -853,6 +985,21 @@ impl<'d, T: Instance, W: word::Word> Sai<'d, T, W> {
     pub fn set_mute(&mut self, value: bool) {
         let ch = T::REGS.ch(self.sub_block as usize);
         ch.cr2().modify(|w| w.set_mute(value));
+    }
+
+    /// Determine the mute state of the receiver.
+    ///
+    /// Clears the mute state flag in the status register.
+    pub fn is_muted(&self) -> Result<bool, Error> {
+        match &self.ring_buffer {
+            RingBuffer::Readable(_) => {
+                let ch = T::REGS.ch(self.sub_block as usize);
+                let mute_state = ch.sr().read().mutedet();
+                ch.clrfr().write(|w| w.set_cmutedet(true));
+                Ok(mute_state)
+            }
+            _ => Err(Error::NotAReceiver),
+        }
     }
 
     /// Write data to the SAI ringbuffer.
@@ -899,43 +1046,42 @@ impl<'d, T: Instance, W: word::Word> Drop for Sai<'d, T, W> {
     }
 }
 
-pub(crate) mod sealed {
-    use super::*;
+trait SealedInstance {
+    const REGS: Regs;
+}
 
-    pub trait Instance {
-        const REGS: Regs;
-    }
+#[derive(Copy, Clone)]
+enum WhichSubBlock {
+    A = 0,
+    B = 1,
+}
 
-    #[derive(Copy, Clone)]
-    pub enum WhichSubBlock {
-        A = 0,
-        B = 1,
-    }
-
-    pub trait SubBlock {
-        const WHICH: WhichSubBlock;
-    }
+trait SealedSubBlock {
+    const WHICH: WhichSubBlock;
 }
 
 /// Sub-block instance trait.
-pub trait SubBlockInstance: sealed::SubBlock {}
+#[allow(private_bounds)]
+pub trait SubBlockInstance: SealedSubBlock {}
 
 /// Sub-block A.
 pub enum A {}
-impl sealed::SubBlock for A {
+impl SealedSubBlock for A {
     const WHICH: WhichSubBlock = WhichSubBlock::A;
 }
 impl SubBlockInstance for A {}
 
 /// Sub-block B.
 pub enum B {}
-impl sealed::SubBlock for B {
+impl SealedSubBlock for B {
     const WHICH: WhichSubBlock = WhichSubBlock::B;
 }
 impl SubBlockInstance for B {}
 
 /// SAI instance trait.
-pub trait Instance: Peripheral<P = Self> + sealed::Instance + RccPeripheral {}
+#[allow(private_bounds)]
+pub trait Instance: Peripheral<P = Self> + SealedInstance + RccPeripheral {}
+
 pin_trait!(SckPin, Instance, SubBlockInstance);
 pin_trait!(FsPin, Instance, SubBlockInstance);
 pin_trait!(SdPin, Instance, SubBlockInstance);
@@ -945,7 +1091,7 @@ dma_trait!(Dma, Instance, SubBlockInstance);
 
 foreach_peripheral!(
     (sai, $inst:ident) => {
-        impl sealed::Instance for peripherals::$inst {
+        impl SealedInstance for peripherals::$inst {
             const REGS: Regs = crate::pac::$inst;
         }
 

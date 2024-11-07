@@ -302,7 +302,14 @@ impl<'d, T: Instance, const FLASH_SIZE: usize> Flash<'d, T, Async, FLASH_SIZE> {
         // pac::XIP_CTRL.stream_fifo().as_ptr()) to avoid DMA stalling on
         // general XIP access.
         const XIP_AUX_BASE: *const u32 = 0x50400000 as *const _;
-        let transfer = unsafe { crate::dma::read(self.dma.as_mut().unwrap(), XIP_AUX_BASE, data, 37) };
+        let transfer = unsafe {
+            crate::dma::read(
+                self.dma.as_mut().unwrap(),
+                XIP_AUX_BASE,
+                data,
+                pac::dma::vals::TreqSel::XIP_STREAM,
+            )
+        };
 
         Ok(BackgroundRead {
             flash: PhantomData,
@@ -326,9 +333,9 @@ impl<'d, T: Instance, const FLASH_SIZE: usize> Flash<'d, T, Async, FLASH_SIZE> {
         // If the destination address is already aligned, then we can just DMA directly
         if (bytes.as_ptr() as u32) % 4 == 0 {
             // Safety: alignment and size have been checked for compatibility
-            let mut buf: &mut [u32] =
+            let buf: &mut [u32] =
                 unsafe { core::slice::from_raw_parts_mut(bytes.as_mut_ptr() as *mut u32, bytes.len() / 4) };
-            self.background_read(offset, &mut buf)?.await;
+            self.background_read(offset, buf)?.await;
             return Ok(());
         }
 
@@ -373,6 +380,11 @@ impl<'d, T: Instance, M: Mode, const FLASH_SIZE: usize> ReadNorFlash for Flash<'
 }
 
 impl<'d, T: Instance, M: Mode, const FLASH_SIZE: usize> MultiwriteNorFlash for Flash<'d, T, M, FLASH_SIZE> {}
+
+impl<'d, T: Instance, const FLASH_SIZE: usize> embedded_storage_async::nor_flash::MultiwriteNorFlash
+    for Flash<'d, T, Async, FLASH_SIZE>
+{
+}
 
 impl<'d, T: Instance, M: Mode, const FLASH_SIZE: usize> NorFlash for Flash<'d, T, M, FLASH_SIZE> {
     const WRITE_SIZE: usize = WRITE_SIZE;
@@ -420,8 +432,6 @@ impl<'d, T: Instance, const FLASH_SIZE: usize> embedded_storage_async::nor_flash
 
 #[allow(dead_code)]
 mod ram_helpers {
-    use core::marker::PhantomData;
-
     use super::*;
     use crate::rom_data;
 
@@ -594,6 +604,7 @@ mod ram_helpers {
     /// addr must be aligned to 4096
     #[inline(never)]
     #[link_section = ".data.ram_func"]
+    #[cfg(feature = "rp2040")]
     unsafe fn write_flash_inner(addr: u32, len: u32, data: Option<&[u8]>, ptrs: *const FlashFunctionPointers) {
         /*
          Should be equivalent to:
@@ -622,18 +633,18 @@ mod ram_helpers {
             "movs r3, #0", // r3 = 0
             "ldr r4, [{ptrs}, #8]",
             "cmp r4, #0",
-            "beq 1f",
+            "beq 2f",
             "blx r4", // flash_range_erase(addr, len, 1 << 31, 0)
-            "1:",
+            "2:",
 
             "mov r0, r8", // r0 = addr
             "mov r1, r9", // r0 = data
             "mov r2, r10", // r2 = len
             "ldr r4, [{ptrs}, #12]",
             "cmp r4, #0",
-            "beq 1f",
+            "beq 2f",
             "blx r4", // flash_range_program(addr, data, len);
-            "1:",
+            "2:",
 
             "ldr r4, [{ptrs}, #16]",
             "blx r4", // flash_flush_cache();
@@ -654,6 +665,13 @@ mod ram_helpers {
             lateout("r10") _,
             clobber_abi("C"),
         );
+    }
+
+    #[inline(never)]
+    #[link_section = ".data.ram_func"]
+    #[cfg(feature = "_rp235x")]
+    unsafe fn write_flash_inner(_addr: u32, _len: u32, _data: Option<&[u8]>, _ptrs: *const FlashFunctionPointers) {
+        todo!();
     }
 
     #[repr(C)]
@@ -755,6 +773,7 @@ mod ram_helpers {
     /// Credit: taken from `rp2040-flash` (also licensed Apache+MIT)
     #[inline(never)]
     #[link_section = ".data.ram_func"]
+    #[cfg(feature = "rp2040")]
     unsafe fn read_flash_inner(cmd: FlashCommand, ptrs: *const FlashFunctionPointers) {
         #[cfg(target_arch = "arm")]
         core::arch::asm!(
@@ -799,12 +818,12 @@ mod ram_helpers {
             "adds r2, 0x60", // &DR
             "ldr r0, [r3, #0]", // cmd_addr
             "ldr r1, [r3, #4]", // cmd_addr_len
-            "10:",
+            "3:",
             "ldrb r3, [r0]",
             "strb r3, [r2]", // DR
             "adds r0, #1",
             "subs r1, #1",
-            "bne 10b",
+            "bne 3b",
 
             // Skip any dummy cycles
             "mov r3, r10", // cmd
@@ -871,6 +890,13 @@ mod ram_helpers {
             clobber_abi("C"),
         );
     }
+
+    #[inline(never)]
+    #[link_section = ".data.ram_func"]
+    #[cfg(feature = "_rp235x")]
+    unsafe fn read_flash_inner(_cmd: FlashCommand, _ptrs: *const FlashFunctionPointers) {
+        todo!();
+    }
 }
 
 /// Make sure to uphold the contract points with rp2040-flash.
@@ -905,22 +931,22 @@ pub(crate) unsafe fn in_ram(operation: impl FnOnce()) -> Result<(), Error> {
     Ok(())
 }
 
-mod sealed {
-    pub trait Instance {}
-    pub trait Mode {}
-}
+trait SealedInstance {}
+trait SealedMode {}
 
 /// Flash instance.
-pub trait Instance: sealed::Instance {}
+#[allow(private_bounds)]
+pub trait Instance: SealedInstance {}
 /// Flash mode.
-pub trait Mode: sealed::Mode {}
+#[allow(private_bounds)]
+pub trait Mode: SealedMode {}
 
-impl sealed::Instance for FLASH {}
+impl SealedInstance for FLASH {}
 impl Instance for FLASH {}
 
 macro_rules! impl_mode {
     ($name:ident) => {
-        impl sealed::Mode for $name {}
+        impl SealedMode for $name {}
         impl Mode for $name {}
     };
 }

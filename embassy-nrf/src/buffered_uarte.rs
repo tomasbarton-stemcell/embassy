@@ -20,29 +20,24 @@ use embassy_hal_internal::{into_ref, PeripheralRef};
 // Re-export SVD variants to allow user to directly set values
 pub use pac::uarte0::{baudrate::BAUDRATE_A as Baudrate, config::PARITY_A as Parity};
 
-use crate::gpio::sealed::Pin;
-use crate::gpio::{AnyPin, Pin as GpioPin, PselBits};
+use crate::gpio::{AnyPin, Pin as GpioPin, PselBits, SealedPin};
 use crate::interrupt::typelevel::Interrupt;
 use crate::ppi::{
     self, AnyConfigurableChannel, AnyGroup, Channel, ConfigurableChannel, Event, Group, Ppi, PpiGroup, Task,
 };
 use crate::timer::{Instance as TimerInstance, Timer};
 use crate::uarte::{configure, drop_tx_rx, Config, Instance as UarteInstance};
-use crate::{interrupt, pac, Peripheral};
+use crate::{interrupt, pac, Peripheral, EASY_DMA_SIZE};
 
-mod sealed {
-    use super::*;
+pub(crate) struct State {
+    tx_buf: RingBuffer,
+    tx_count: AtomicUsize,
 
-    pub struct State {
-        pub tx_buf: RingBuffer,
-        pub tx_count: AtomicUsize,
-
-        pub rx_buf: RingBuffer,
-        pub rx_started: AtomicBool,
-        pub rx_started_count: AtomicU8,
-        pub rx_ended_count: AtomicU8,
-        pub rx_ppi_ch: AtomicU8,
-    }
+    rx_buf: RingBuffer,
+    rx_started: AtomicBool,
+    rx_started_count: AtomicU8,
+    rx_ended_count: AtomicU8,
+    rx_ppi_ch: AtomicU8,
 }
 
 /// UART error.
@@ -52,8 +47,6 @@ mod sealed {
 pub enum Error {
     // No errors for now
 }
-
-pub(crate) use sealed::State;
 
 impl State {
     pub(crate) const fn new() -> Self {
@@ -193,6 +186,7 @@ impl<U: UarteInstance> interrupt::typelevel::Handler<U::Interrupt> for Interrupt
             // If not TXing, start.
             if s.tx_count.load(Ordering::Relaxed) == 0 {
                 let (ptr, len) = tx.pop_buf();
+                let len = len.min(EASY_DMA_SIZE);
                 if len != 0 {
                     //trace!("  irq_tx: starting {:?}", len);
                     s.tx_count.store(len, Ordering::Relaxed);
@@ -225,6 +219,7 @@ impl<'d, U: UarteInstance, T: TimerInstance> BufferedUarte<'d, U, T> {
     /// # Panics
     ///
     /// Panics if `rx_buffer.len()` is odd.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         uarte: impl Peripheral<P = U> + 'd,
         timer: impl Peripheral<P = T> + 'd,
@@ -260,6 +255,7 @@ impl<'d, U: UarteInstance, T: TimerInstance> BufferedUarte<'d, U, T> {
     /// # Panics
     ///
     /// Panics if `rx_buffer.len()` is odd.
+    #[allow(clippy::too_many_arguments)]
     pub fn new_with_rtscts(
         uarte: impl Peripheral<P = U> + 'd,
         timer: impl Peripheral<P = T> + 'd,
@@ -292,6 +288,7 @@ impl<'d, U: UarteInstance, T: TimerInstance> BufferedUarte<'d, U, T> {
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn new_inner(
         peri: PeripheralRef<'d, U>,
         timer: PeripheralRef<'d, T>,
@@ -311,6 +308,7 @@ impl<'d, U: UarteInstance, T: TimerInstance> BufferedUarte<'d, U, T> {
         let tx = BufferedUarteTx::new_innerer(unsafe { peri.clone_unchecked() }, txd, cts, tx_buffer);
         let rx = BufferedUarteRx::new_innerer(peri, timer, ppi_ch1, ppi_ch2, ppi_group, rxd, rts, rx_buffer);
 
+        U::regs().enable.write(|w| w.enable().enabled());
         U::Interrupt::pend();
         unsafe { U::Interrupt::enable() };
 
@@ -412,6 +410,7 @@ impl<'d, U: UarteInstance> BufferedUarteTx<'d, U> {
 
         let this = Self::new_innerer(peri, txd, cts, tx_buffer);
 
+        U::regs().enable.write(|w| w.enable().enabled());
         U::Interrupt::pend();
         unsafe { U::Interrupt::enable() };
 
@@ -538,6 +537,7 @@ impl<'d, U: UarteInstance, T: TimerInstance> BufferedUarteRx<'d, U, T> {
     /// # Panics
     ///
     /// Panics if `rx_buffer.len()` is odd.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         uarte: impl Peripheral<P = U> + 'd,
         timer: impl Peripheral<P = T> + 'd,
@@ -568,6 +568,7 @@ impl<'d, U: UarteInstance, T: TimerInstance> BufferedUarteRx<'d, U, T> {
     /// # Panics
     ///
     /// Panics if `rx_buffer.len()` is odd.
+    #[allow(clippy::too_many_arguments)]
     pub fn new_with_rts(
         uarte: impl Peripheral<P = U> + 'd,
         timer: impl Peripheral<P = T> + 'd,
@@ -594,6 +595,7 @@ impl<'d, U: UarteInstance, T: TimerInstance> BufferedUarteRx<'d, U, T> {
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn new_inner(
         peri: PeripheralRef<'d, U>,
         timer: PeripheralRef<'d, T>,
@@ -609,6 +611,7 @@ impl<'d, U: UarteInstance, T: TimerInstance> BufferedUarteRx<'d, U, T> {
 
         let this = Self::new_innerer(peri, timer, ppi_ch1, ppi_ch2, ppi_group, rxd, rts, rx_buffer);
 
+        U::regs().enable.write(|w| w.enable().enabled());
         U::Interrupt::pend();
         unsafe { U::Interrupt::enable() };
 
@@ -617,6 +620,7 @@ impl<'d, U: UarteInstance, T: TimerInstance> BufferedUarteRx<'d, U, T> {
         this
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn new_innerer(
         peri: PeripheralRef<'d, U>,
         timer: PeripheralRef<'d, T>,
@@ -645,8 +649,8 @@ impl<'d, U: UarteInstance, T: TimerInstance> BufferedUarteRx<'d, U, T> {
         s.rx_started_count.store(0, Ordering::Relaxed);
         s.rx_ended_count.store(0, Ordering::Relaxed);
         s.rx_started.store(false, Ordering::Relaxed);
-        let len = rx_buffer.len();
-        unsafe { s.rx_buf.init(rx_buffer.as_mut_ptr(), len) };
+        let rx_len = rx_buffer.len().min(EASY_DMA_SIZE * 2);
+        unsafe { s.rx_buf.init(rx_buffer.as_mut_ptr(), rx_len) };
 
         // clear errors
         let errors = r.errorsrc.read().bits();
@@ -667,7 +671,7 @@ impl<'d, U: UarteInstance, T: TimerInstance> BufferedUarteRx<'d, U, T> {
 
         // Configure byte counter.
         let timer = Timer::new_counter(timer);
-        timer.cc(1).write(rx_buffer.len() as u32 * 2);
+        timer.cc(1).write(rx_len as u32 * 2);
         timer.cc(1).short_compare_clear();
         timer.clear();
         timer.start();
@@ -769,6 +773,12 @@ impl<'d, U: UarteInstance, T: TimerInstance> BufferedUarteRx<'d, U, T> {
         rx.pop_done(amt);
         U::regs().intenset.write(|w| w.rxstarted().set());
     }
+
+    /// we are ready to read if there is data in the buffer
+    fn read_ready() -> Result<bool, Error> {
+        let state = U::buffered_state();
+        Ok(!state.rx_buf.is_empty())
+    }
 }
 
 impl<'a, U: UarteInstance, T: TimerInstance> Drop for BufferedUarteRx<'a, U, T> {
@@ -827,6 +837,18 @@ mod _embedded_io {
     impl<'d: 'd, U: UarteInstance, T: TimerInstance> embedded_io_async::Read for BufferedUarteRx<'d, U, T> {
         async fn read(&mut self, buf: &mut [u8]) -> Result<usize, Self::Error> {
             self.read(buf).await
+        }
+    }
+
+    impl<'d, U: UarteInstance, T: TimerInstance + 'd> embedded_io_async::ReadReady for BufferedUarte<'d, U, T> {
+        fn read_ready(&mut self) -> Result<bool, Self::Error> {
+            BufferedUarteRx::<'d, U, T>::read_ready()
+        }
+    }
+
+    impl<'d, U: UarteInstance, T: TimerInstance + 'd> embedded_io_async::ReadReady for BufferedUarteRx<'d, U, T> {
+        fn read_ready(&mut self) -> Result<bool, Self::Error> {
+            Self::read_ready()
         }
     }
 
