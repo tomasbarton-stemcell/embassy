@@ -236,6 +236,8 @@ impl<'d, T: CoreInstance> Timer<'d, T> {
     /// get the capability of the timer
     pub fn bits(&self) -> TimerBits {
         T::BITS
+    }
+
     /// reset the peripheral registers
     pub fn enable_and_reset(&self) {
         rcc::enable_and_reset::<T>();

@@ -98,7 +98,7 @@ pub enum FlashBank {
 #[cfg_attr(flash_f2, path = "f2.rs")]
 #[cfg_attr(flash_f4, path = "f4.rs")]
 #[cfg_attr(flash_f7, path = "f7.rs")]
-#[cfg_attr(flash_g0, path = "g.rs")]
+#[cfg_attr(any(flash_g0x0, flash_g0x1), path = "g.rs")]
 #[cfg_attr(any(flash_g4c2, flash_g4c3, flash_g4c4), path = "g4.rs")]
 #[cfg_attr(flash_h7, path = "h7.rs")]
 #[cfg_attr(flash_h7ab, path = "h7.rs")]
