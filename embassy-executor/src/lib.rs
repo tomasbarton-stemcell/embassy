@@ -1,4 +1,5 @@
 #![cfg_attr(not(any(feature = "arch-std", feature = "arch-wasm")), no_std)]
+#![cfg_attr(all(feature = "nightly", not(at_least_2024_09_06)), feature(waker_getters))]
 #![allow(clippy::new_without_default)]
 #![doc = include_str!("../README.md")]
 #![warn(missing_docs)]
@@ -23,7 +24,14 @@ macro_rules! check_at_most_one {
         check_at_most_one!(@amo [$($f)*] [$($f)*] []);
     };
 }
-check_at_most_one!("arch-avr", "arch-cortex-m", "arch-riscv32", "arch-std", "arch-wasm",);
+check_at_most_one!(
+    "arch-avr",
+    "arch-cortex-m",
+    "arch-riscv32",
+    "arch-std",
+    "arch-wasm",
+    "arch-spin",
+);
 
 #[cfg(feature = "_arch")]
 #[cfg_attr(feature = "arch-avr", path = "arch/avr.rs")]
@@ -31,6 +39,7 @@ check_at_most_one!("arch-avr", "arch-cortex-m", "arch-riscv32", "arch-std", "arc
 #[cfg_attr(feature = "arch-riscv32", path = "arch/riscv32.rs")]
 #[cfg_attr(feature = "arch-std", path = "arch/std.rs")]
 #[cfg_attr(feature = "arch-wasm", path = "arch/wasm.rs")]
+#[cfg_attr(feature = "arch-spin", path = "arch/spin.rs")]
 mod arch;
 
 #[cfg(feature = "_arch")]

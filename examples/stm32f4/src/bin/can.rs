@@ -35,23 +35,18 @@ async fn main(_spawner: Spawner) {
 
     let mut can = Can::new(p.CAN1, p.PA11, p.PA12, Irqs);
 
-    can.as_mut()
-        .modify_filters()
-        .enable_bank(0, Fifo::Fifo0, Mask32::accept_all());
+    can.modify_filters().enable_bank(0, Fifo::Fifo0, Mask32::accept_all());
 
-    can.as_mut()
-        .modify_config()
+    can.modify_config()
         .set_loopback(true) // Receive own frames
         .set_silent(true)
-        .leave_disabled();
-
-    can.set_bitrate(1_000_000);
+        .set_bitrate(1_000_000);
 
     can.enable().await;
 
     let mut i: u8 = 0;
     loop {
-        let tx_frame = Frame::new_data(unwrap!(StandardId::new(i as _)), [i]);
+        let tx_frame = Frame::new_data(unwrap!(StandardId::new(i as _)), &[i]).unwrap();
         let tx_ts = Instant::now();
         can.write(&tx_frame).await;
 
@@ -65,9 +60,9 @@ async fn main(_spawner: Spawner) {
 
         info!(
             "loopback frame {=u8}, latency: {} us",
-            unwrap!(envelope.frame.data())[0],
+            envelope.frame.data()[0],
             latency.as_micros()
         );
-        i += 1;
+        i = i.wrapping_add(1);
     }
 }

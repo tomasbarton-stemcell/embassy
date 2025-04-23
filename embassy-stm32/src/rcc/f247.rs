@@ -63,6 +63,7 @@ pub struct Pll {
 /// Used to calculate flash waitstates. See
 /// RM0033 - Table 3. Number of wait states according to Cortex®-M3 clock frequency
 #[cfg(stm32f2)]
+#[derive(Clone, Copy)]
 pub enum VoltageScale {
     /// 2.7 to 3.6 V
     Range0,
@@ -76,6 +77,7 @@ pub enum VoltageScale {
 
 /// Configuration of the core clocks
 #[non_exhaustive]
+#[derive(Clone, Copy)]
 pub struct Config {
     pub hsi: bool,
     pub hse: Option<Hse>,
@@ -146,17 +148,18 @@ pub(crate) unsafe fn init(config: Config) {
         while !PWR.csr1().read().odswrdy() {}
     }
 
+    // Turn on the HSI
+    RCC.cr().modify(|w| w.set_hsion(true));
+    while !RCC.cr().read().hsirdy() {}
+
+    // Use the HSI clock as system clock during the actual clock setup
+    RCC.cfgr().modify(|w| w.set_sw(Sysclk::HSI));
+    while RCC.cfgr().read().sws() != Sysclk::HSI {}
+
     // Configure HSI
     let hsi = match config.hsi {
-        false => {
-            RCC.cr().modify(|w| w.set_hsion(false));
-            None
-        }
-        true => {
-            RCC.cr().modify(|w| w.set_hsion(true));
-            while !RCC.cr().read().hsirdy() {}
-            Some(HSI_FREQ)
-        }
+        false => None,
+        true => Some(HSI_FREQ),
     };
 
     // Configure HSE
@@ -260,6 +263,11 @@ pub(crate) unsafe fn init(config: Config) {
     });
     while RCC.cfgr().read().sws() != config.sys {}
 
+    // Disable HSI if not used
+    if !config.hsi {
+        RCC.cr().modify(|w| w.set_hsion(false));
+    }
+
     config.mux.init();
 
     set_clocks!(
@@ -277,6 +285,7 @@ pub(crate) unsafe fn init(config: Config) {
         pclk2_tim: Some(pclk2_tim),
         rtc: rtc,
         pll1_q: pll.q,
+        pll1_r: pll.r,
 
         #[cfg(any(stm32f2, all(stm32f4, not(stm32f410)), stm32f7))]
         plli2s1_p: plli2s.p,
@@ -295,6 +304,9 @@ pub(crate) unsafe fn init(config: Config) {
         // TODO workaround until f4 rcc is fixed in stm32-data
         #[cfg(not(any(stm32f446, stm32f427, stm32f437, stm32f4x9, stm32f7)))]
         pllsai1_q: None,
+
+        #[cfg(dsihost)]
+        dsi_phy: None, // DSI PLL clock not supported, don't call `RccPeripheral::frequency()` in the drivers
 
         hsi_div488: hsi.map(|hsi| hsi/488u32),
         hsi_hse: None,

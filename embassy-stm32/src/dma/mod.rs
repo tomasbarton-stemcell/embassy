@@ -14,12 +14,13 @@ pub use gpdma::*;
 #[cfg(dmamux)]
 mod dmamux;
 #[cfg(dmamux)]
-pub use dmamux::*;
+pub(crate) use dmamux::*;
+
+mod util;
+pub(crate) use util::*;
 
 pub(crate) mod ringbuffer;
 pub mod word;
-
-use core::mem;
 
 use embassy_hal_internal::{impl_peripheral, Peripheral};
 
@@ -39,17 +40,18 @@ pub type Request = u8;
 #[cfg(not(any(dma_v2, bdma_v2, gpdma, dmamux)))]
 pub type Request = ();
 
-pub(crate) mod sealed {
-    pub trait Channel {
-        fn id(&self) -> u8;
-    }
-    pub trait ChannelInterrupt {
-        unsafe fn on_irq();
-    }
+pub(crate) trait SealedChannel {
+    fn id(&self) -> u8;
+}
+
+pub(crate) trait ChannelInterrupt {
+    #[cfg_attr(not(feature = "rt"), allow(unused))]
+    unsafe fn on_irq();
 }
 
 /// DMA channel.
-pub trait Channel: sealed::Channel + Peripheral<P = Self> + Into<AnyChannel> + 'static {
+#[allow(private_bounds)]
+pub trait Channel: SealedChannel + Peripheral<P = Self> + Into<AnyChannel> + 'static {
     /// Type-erase (degrade) this pin into an `AnyChannel`.
     ///
     /// This converts DMA channel singletons (`DMA1_CH3`, `DMA2_CH1`, ...), which
@@ -63,12 +65,12 @@ pub trait Channel: sealed::Channel + Peripheral<P = Self> + Into<AnyChannel> + '
 
 macro_rules! dma_channel_impl {
     ($channel_peri:ident, $index:expr) => {
-        impl crate::dma::sealed::Channel for crate::peripherals::$channel_peri {
+        impl crate::dma::SealedChannel for crate::peripherals::$channel_peri {
             fn id(&self) -> u8 {
                 $index
             }
         }
-        impl crate::dma::sealed::ChannelInterrupt for crate::peripherals::$channel_peri {
+        impl crate::dma::ChannelInterrupt for crate::peripherals::$channel_peri {
             unsafe fn on_irq() {
                 crate::dma::AnyChannel { id: $index }.on_irq();
             }
@@ -96,7 +98,7 @@ impl AnyChannel {
     }
 }
 
-impl sealed::Channel for AnyChannel {
+impl SealedChannel for AnyChannel {
     fn id(&self) -> u8 {
         self.id
     }
@@ -116,17 +118,6 @@ static STATE: [ChannelState; CHANNEL_COUNT] = [ChannelState::NEW; CHANNEL_COUNT]
 pub struct NoDma;
 
 impl_peripheral!(NoDma);
-
-// TODO: replace transmutes with core::ptr::metadata once it's stable
-#[allow(unused)]
-pub(crate) fn slice_ptr_parts<T>(slice: *const [T]) -> (usize, usize) {
-    unsafe { mem::transmute(slice) }
-}
-
-#[allow(unused)]
-pub(crate) fn slice_ptr_parts_mut<T>(slice: *mut [T]) -> (usize, usize) {
-    unsafe { mem::transmute(slice) }
-}
 
 // safety: must be called only once at startup
 pub(crate) unsafe fn init(
